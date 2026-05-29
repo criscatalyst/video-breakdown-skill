@@ -4,3 +4,4 @@ video-breakdown-*/
 .ffmpeg.log
 .whisper.log
 .DS_Store
+.claude/

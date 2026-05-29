@@ -16,25 +16,57 @@ Reverse-engineer any video — both the **visual** track (what's on screen, shot
 
 > If the user only wants the spoken words, the lighter `transcribe` skill is enough. Use this one when the **visuals matter**.
 
-## Setup (run once, only if needed)
+## Setup — everything this skill needs to run
 
-The script needs three tools. Check first:
+The script depends on three command-line tools, and those tools have their own
+dependencies. Here is the **full chain** so you know exactly what must be present.
+
+| Tool | Why it's needed | Pulls in / requires |
+|---|---|---|
+| **Homebrew** | package manager used to install everything below | macOS; see https://brew.sh |
+| **`yt-dlp`** | downloads the video | Python 3 (Homebrew installs it automatically as a dependency). **Needs `ffmpeg`** to merge separate video+audio streams. |
+| **`ffmpeg`** | splits the audio, samples frames, builds contact sheets, burns timestamps | self-contained |
+| **`whisper`** (`openai-whisper`) | local speech-to-text | Python 3 + **PyTorch** (a large dependency, ~2 GB, installed automatically). Uses `ffmpeg` to read audio. On first run it **downloads the model weights** (~75 MB `tiny`, ~500 MB `small`, ~1.5 GB `medium`, ~3 GB `large-v3`) into `~/.cache/whisper/`. |
+
+**Note:** none of this needs Java, Node, or Docker. The only heavy one-time pulls are
+PyTorch (via the whisper install) and the Whisper model weights (on the first
+transcription). yt-dlp does **not** work without ffmpeg for many sites, which is why
+ffmpeg is non-optional even though it looks separate.
+
+### Step 1 — verify the chain (always do this first)
 
 ```bash
-command -v yt-dlp ffmpeg whisper
+echo "Homebrew:"; command -v brew && brew --version | head -1
+echo "yt-dlp:";   command -v yt-dlp && yt-dlp --version
+echo "ffmpeg:";   command -v ffmpeg && ffmpeg -version | head -1
+echo "whisper:";  command -v whisper && whisper --help >/dev/null 2>&1 && echo "ok"
+echo "python3:";  command -v python3 && python3 --version
 ```
 
-If any is missing, tell the user and offer to install (this changes their system — get a yes first):
+Read the output. If a line shows nothing after the label, that tool is missing.
+
+### Step 2 — install whatever is missing
+
+Installing software changes the user's system — **get a yes from the user first**, then:
 
 ```bash
+# If Homebrew itself is missing, the user must install it (it prompts for a password):
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Then install the three tools (Python + PyTorch come along automatically):
 brew install yt-dlp ffmpeg openai-whisper
 ```
 
-(Requires [Homebrew](https://brew.sh).) Make the script executable on first use:
+If only one is missing, install just that one (e.g. `brew install ffmpeg`).
+
+### Step 3 — make the script executable (first use only)
 
 ```bash
 chmod +x ~/.claude/skills/video-breakdown/breakdown.sh
 ```
+
+The script also re-checks dependencies itself and exits with code `10` plus the exact
+`brew install …` line if anything is still missing — so a missing tool never fails silently.
 
 ## How to run
 
@@ -73,18 +105,67 @@ Then synthesize for the user. Don't dump raw frames — deliver a **breakdown**:
 
 Ask the user what they're after (recreate it? steal the hook? study pacing?) and tailor the depth.
 
-## Failure modes
+## Self-debugging playbook
 
-- **Private / login-walled** (IG, some TikTok) → yt-dlp fails at step 1. Offer to retry by editing the script's yt-dlp call to add `--cookies-from-browser safari` (or `chrome`).
-- **No audio track** → step 2 reports it; transcription is skipped, visual analysis still works.
-- **Wrong language in transcript** → re-run with an explicit `language` arg.
-- **Hundreds of frames / huge sheets** → fps was too high for a long video. Re-run with a lower `fps`.
-- **No burned-in timestamp on frames** → no TTF font was found on the system; frame N is at ≈ N/fps seconds. Note this when citing times.
+If the script errors or the output looks wrong, **diagnose it yourself before asking the user.**
+You have everything you need: the exit code, the on-screen step log (`[1/5]…[5/5]`), and two
+log files written into the output dir.
+
+### Where the evidence is
+
+- **Exit code** — tells you which stage failed:
+  | Code | Meaning | First move |
+  |---|---|---|
+  | `1` | bad/missing arguments | re-read the usage and re-run with a URL |
+  | `10` | a dependency is missing | run the Step-1 verify block, then install the named tool |
+  | `2` | yt-dlp produced no video | see "Download failed" below |
+  | non-zero from ffmpeg/whisper | read the log files | see below |
+- **`<outdir>/.ffmpeg.log`** — full ffmpeg stderr for the audio-split, frame, and contact-sheet steps.
+- **`<outdir>/.whisper.log`** — full whisper stderr (model load, CUDA/MPS notices, errors).
+- Inspect them with: `tail -30 <outdir>/.ffmpeg.log` and `tail -30 <outdir>/.whisper.log`.
+
+### Common failures → fix
+
+- **Download failed (exit 2) on Instagram/TikTok** → almost always login-walled or private.
+  Re-run the script after editing the yt-dlp call to add cookies, e.g.:
+  `--cookies-from-browser safari` (or `chrome`, `firefox`). Tell the user they must be logged
+  into that site in that browser.
+- **Download failed + a `SABR` / "missing a URL" / 403 warning on YouTube** → yt-dlp is out of
+  date relative to a site change. Fix: `brew upgrade yt-dlp` (or `yt-dlp -U`), then re-run. This
+  is the single most common YouTube breakage.
+- **"ffmpeg not found" mid-download** → yt-dlp downloaded streams but can't merge them. Install
+  ffmpeg (`brew install ffmpeg`) and re-run.
+- **`frames/` is empty but the video downloaded** → check `.ffmpeg.log`. Usually a corrupt
+  download (re-run) or an exotic codec (re-run; ffmpeg transcodes on read).
+- **Frames have no burned-in timestamp** → no TTF font was found on the system. The frames are
+  still valid; frame N is at ≈ `N / fps` seconds. To restore the overlay, install a font
+  (`brew install --cask font-dejavu`) or note times by frame index.
+- **`transcript.txt` says "(no audio track)"** → the video is silent / music-only. Expected;
+  do the visual breakdown only.
+- **Transcript is empty or in the wrong language** → re-run with an explicit `language` arg
+  (`en`, `it`, …). Very short clips fool auto-detect.
+- **Whisper is extremely slow / seems hung** → it runs on CPU and a large model on a long video
+  takes minutes. Re-run with a smaller model (`tiny`/`base`) and/or a lower `fps`. The
+  `.whisper.log` shows progress.
+- **Hundreds of frames / giant sheets** → `fps` was too high for the video length. Re-run lower
+  (`0.5` or less).
+- **"command not found: brew"** → Homebrew isn't installed; the user must install it first
+  (see Setup Step 2).
+
+### How to debug methodically
+
+1. Note the exit code and which `[n/5]` step printed last.
+2. `tail` the relevant log file for the real error message.
+3. Match it to the table above; if it's new, read the actual ffmpeg/whisper/yt-dlp error text —
+   it's usually self-explanatory.
+4. Apply the fix and **re-run the whole script** (it's idempotent — it writes into a fresh or the
+   given outdir). Only escalate to the user for things you genuinely can't resolve (private
+   content needing their login, missing Homebrew needing their password).
 
 ## Stack
 
-- `yt-dlp` — downloads the video from almost any site
+- `yt-dlp` — downloads the video from almost any site (needs ffmpeg + Python)
 - `ffmpeg` — splits the audio, samples frames, builds contact sheets, burns timestamps
-- `openai-whisper` — local speech-to-text (timestamped `.srt`)
+- `openai-whisper` — local speech-to-text, timestamped `.srt` (needs Python + PyTorch)
 
 Everything runs locally. Zero cost. First Whisper run downloads model weights (~500MB `small`), cached in `~/.cache/whisper/`.

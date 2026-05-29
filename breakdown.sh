@@ -72,7 +72,10 @@ yt-dlp \
 
 VIDEO=$(find "$OUTDIR" -maxdepth 1 -name 'video.*' | head -n1)
 if [ -z "$VIDEO" ] || [ ! -f "$VIDEO" ]; then
-  echo "ERROR: yt-dlp did not produce a video file (private/login-walled? try --cookies-from-browser)." >&2
+  echo "ERROR: yt-dlp did not produce a video file." >&2
+  echo "  - Private / login-walled? Re-run with: --cookies-from-browser safari (or chrome)" >&2
+  echo "  - YouTube SABR / 403 / \"missing a URL\" warning? yt-dlp is stale: brew upgrade yt-dlp (or yt-dlp -U), then retry." >&2
+  echo "  - See $OUTDIR/.ffmpeg.log for ffmpeg-side errors." >&2
   exit 2
 fi
 # Normalize to .mp4 path for downstream steps
