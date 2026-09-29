@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This repo has moved to [criscatalyst/creator-skills](https://github.com/criscatalyst/creator-skills/tree/main/skills/video-breakdown).** It is archived and no longer updated: the latest version of this skill lives there.
+>
+> Install it as a plugin in Claude Code: `/plugin marketplace add criscatalyst/creator-skills` then `/plugin install video-breakdown@creator-skills`.
+
 # Video Breakdown — Claude Code skill
 
 Break any video down into its **visuals** and its **audio**, locally on your Mac. Paste a URL, and Claude reverse-engineers it shot by shot — what's on screen at every second **and** what's being said — using `yt-dlp` + `ffmpeg` + OpenAI Whisper. Free, no API key, nothing uploaded.
